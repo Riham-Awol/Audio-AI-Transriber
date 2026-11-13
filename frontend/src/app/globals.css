@@ -41,3 +41,43 @@
   }
 }
 
+@media print {
+  aside,
+  header,
+  nav,
+  button,
+  .print\:hidden {
+    display: none !important;
+  }
+
+  body {
+    background: #ffffff !important;
+    color: #111827 !important;
+  }
+
+  main {
+    max-width: 100% !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+
+  .print\:block {
+    display: block !important;
+  }
+
+  div, p, span {
+    break-inside: auto;
+  }
+
+  .rounded-xl {
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
+    border: 1px solid #e5e7eb !important;
+    box-shadow: none !important;
+    background: #ffffff !important;
+    color: #111827 !important;
+    margin-bottom: 0.75rem !important;
+  }
+}
+
+

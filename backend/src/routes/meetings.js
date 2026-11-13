@@ -1,10 +1,11 @@
 import crypto from 'node:crypto';
 import { Router } from 'express';
-import { query, queryOne } from '../config/database.js';
+import { query, queryOne, withTransaction } from '../config/database.js';
 import { requireAuth, requireOrganization, requireRole } from '../middleware/auth.js';
 import { AppError, asyncHandler } from '../middleware/errorHandler.js';
 import { assertEnum, assertValidUuid, parsePagination } from '../middleware/validate.js';
 import { recordAuditLog } from '../services/auditService.js';
+import { generateDocx, generatePdf, generatePlainText } from '../services/exportService.js';
 
 const router = Router();
 
@@ -299,6 +300,8 @@ router.get(
       query(
         `SELECT ts.id, ts.sequence_index AS sequenceIndex, ts.start_ms AS startMs,
                 ts.end_ms AS endMs, ts.text, ts.confidence,
+                ts.speaker_id AS speakerId, s.speaker_key AS speakerKey,
+                ts.is_edited AS isEdited, ts.words_json AS wordsJson,
                 COALESCE(s.display_name, 'Speaker') AS speakerName,
                 COALESCE(s.color_hex, '#762F48') AS speakerColor
          FROM transcript_segments ts
@@ -318,6 +321,24 @@ router.get(
       ),
     ]);
 
+    const formattedSegments = (segments || []).map((seg) => {
+      let parsedWords = [];
+      if (typeof seg.wordsJson === 'string') {
+        try {
+          parsedWords = JSON.parse(seg.wordsJson);
+        } catch {
+          parsedWords = [];
+        }
+      } else if (Array.isArray(seg.wordsJson)) {
+        parsedWords = seg.wordsJson;
+      }
+      return {
+        ...seg,
+        isEdited: Boolean(seg.isEdited),
+        wordsJson: parsedWords,
+      };
+    });
+
     res.json({
       meeting: formatMeetingRow(row),
       speakers,
@@ -326,7 +347,7 @@ router.get(
       actionItems,
       notes,
       shares,
-      segments,
+      segments: formattedSegments,
       recordings,
     });
   })
@@ -645,6 +666,522 @@ router.post(
         createdAt: new Date().toISOString(),
       },
     });
+  })
+);
+
+// ---------------------------------------------------------------------------
+// Phase 3: Interactive Transcript Viewer, Editor & Export Services
+// ---------------------------------------------------------------------------
+
+async function syncMeetingTranscript(meetingId, organizationId) {
+  const segments = await query(
+    `SELECT text FROM transcript_segments
+     WHERE meeting_id = ? AND organization_id = ?
+     ORDER BY sequence_index ASC`,
+    [meetingId, organizationId]
+  );
+  const fullText = segments.map((s) => s.text).join(' ');
+  const wordCount = fullText.trim() ? fullText.trim().split(/\s+/).length : 0;
+  await query(
+    `UPDATE transcripts
+     SET full_text = ?, word_count = ?
+     WHERE meeting_id = ? AND organization_id = ?`,
+    [fullText, wordCount, meetingId, organizationId]
+  );
+}
+
+router.get(
+  '/:id/transcript',
+  requireAuth,
+  requireOrganization,
+  asyncHandler(async (req, res) => {
+    const meetingId = assertValidUuid(req.params.id, 'meetingId');
+    const meeting = await queryOne(
+      'SELECT id, title, status FROM meetings WHERE id = ? AND organization_id = ? AND deleted_at IS NULL',
+      [meetingId, req.organization.id]
+    );
+    if (!meeting) {
+      throw new AppError(404, 'Meeting not found.', 'NOT_FOUND');
+    }
+
+    const [transcript, segments, speakers] = await Promise.all([
+      queryOne(
+        `SELECT id, model_name AS modelName, diarization_model AS diarizationModel,
+                language_code AS languageCode, full_text AS fullText, word_count AS wordCount,
+                average_confidence AS averageConfidence, status, updated_at AS updatedAt
+         FROM transcripts
+         WHERE meeting_id = ? AND organization_id = ?`,
+        [meetingId, req.organization.id]
+      ),
+      query(
+        `SELECT ts.id, ts.sequence_index AS sequenceIndex, ts.start_ms AS startMs,
+                ts.end_ms AS endMs, ts.text, ts.confidence,
+                ts.speaker_id AS speakerId, s.speaker_key AS speakerKey,
+                ts.is_edited AS isEdited, ts.words_json AS wordsJson,
+                COALESCE(s.display_name, 'Speaker') AS speakerName,
+                COALESCE(s.color_hex, '#762F48') AS speakerColor
+         FROM transcript_segments ts
+         LEFT JOIN speakers s ON s.id = ts.speaker_id
+         WHERE ts.meeting_id = ? AND ts.organization_id = ?
+         ORDER BY ts.sequence_index ASC`,
+        [meetingId, req.organization.id]
+      ),
+      query(
+        `SELECT id, speaker_key AS speakerKey, display_name AS displayName,
+                color_hex AS colorHex, total_speaking_seconds AS totalSpeakingSeconds
+         FROM speakers
+         WHERE meeting_id = ? AND organization_id = ?
+         ORDER BY speaker_key ASC`,
+        [meetingId, req.organization.id]
+      ),
+    ]);
+
+    const formattedSegments = (segments || []).map((seg) => {
+      let parsedWords = [];
+      if (typeof seg.wordsJson === 'string') {
+        try {
+          parsedWords = JSON.parse(seg.wordsJson);
+        } catch {
+          parsedWords = [];
+        }
+      } else if (Array.isArray(seg.wordsJson)) {
+        parsedWords = seg.wordsJson;
+      }
+      return {
+        ...seg,
+        isEdited: Boolean(seg.isEdited),
+        wordsJson: parsedWords,
+      };
+    });
+
+    res.json({
+      transcript: transcript || null,
+      segments: formattedSegments,
+      speakers: speakers || [],
+    });
+  })
+);
+
+router.patch(
+  '/:id/transcript/segments/:segmentId',
+  requireAuth,
+  requireOrganization,
+  asyncHandler(async (req, res) => {
+    const meetingId = assertValidUuid(req.params.id, 'meetingId');
+    const segmentId = assertValidUuid(req.params.segmentId, 'segmentId');
+    const { text, speakerId } = req.body || {};
+
+    const existing = await queryOne(
+      `SELECT * FROM transcript_segments
+       WHERE id = ? AND meeting_id = ? AND organization_id = ?`,
+      [segmentId, meetingId, req.organization.id]
+    );
+    if (!existing) {
+      throw new AppError(404, 'Transcript segment not found.', 'NOT_FOUND');
+    }
+
+    const updates = ['is_edited = 1', 'edited_by = ?'];
+    const params = [req.user.id];
+
+    if (text !== undefined) {
+      if (typeof text !== 'string' || !text.trim()) {
+        throw new AppError(400, 'Segment text cannot be empty.', 'VALIDATION_ERROR');
+      }
+      updates.push('text = ?');
+      params.push(text.trim());
+    }
+
+    if (speakerId !== undefined) {
+      if (speakerId !== null) {
+        assertValidUuid(speakerId, 'speakerId');
+        const speaker = await queryOne(
+          'SELECT id FROM speakers WHERE id = ? AND meeting_id = ? AND organization_id = ?',
+          [speakerId, meetingId, req.organization.id]
+        );
+        if (!speaker) {
+          throw new AppError(404, 'Speaker not found for this meeting.', 'NOT_FOUND');
+        }
+      }
+      updates.push('speaker_id = ?');
+      params.push(speakerId);
+    }
+
+    params.push(segmentId, meetingId, req.organization.id);
+    await query(
+      `UPDATE transcript_segments
+       SET ${updates.join(', ')}
+       WHERE id = ? AND meeting_id = ? AND organization_id = ?`,
+      params
+    );
+
+    await syncMeetingTranscript(meetingId, req.organization.id);
+
+    const updated = await queryOne(
+      `SELECT ts.id, ts.sequence_index AS sequenceIndex, ts.start_ms AS startMs,
+              ts.end_ms AS endMs, ts.text, ts.confidence,
+              ts.speaker_id AS speakerId, s.speaker_key AS speakerKey,
+              ts.is_edited AS isEdited, ts.words_json AS wordsJson,
+              COALESCE(s.display_name, 'Speaker') AS speakerName,
+              COALESCE(s.color_hex, '#762F48') AS speakerColor
+       FROM transcript_segments ts
+       LEFT JOIN speakers s ON s.id = ts.speaker_id
+       WHERE ts.id = ? AND ts.meeting_id = ? AND ts.organization_id = ?`,
+      [segmentId, meetingId, req.organization.id]
+    );
+
+    emitOrgEvent(req, 'transcript:segment-updated', { meetingId, segment: updated });
+
+    res.json({ segment: updated });
+  })
+);
+
+router.post(
+  '/:id/transcript/segments/:segmentId/split',
+  requireAuth,
+  requireOrganization,
+  asyncHandler(async (req, res) => {
+    const meetingId = assertValidUuid(req.params.id, 'meetingId');
+    const segmentId = assertValidUuid(req.params.segmentId, 'segmentId');
+    const { splitTimestampMs, splitTextFirst, splitTextSecond } = req.body || {};
+
+    if (!splitTextFirst || !splitTextSecond) {
+      throw new AppError(400, 'Both splitTextFirst and splitTextSecond are required.', 'VALIDATION_ERROR');
+    }
+
+    const seg = await queryOne(
+      `SELECT * FROM transcript_segments
+       WHERE id = ? AND meeting_id = ? AND organization_id = ?`,
+      [segmentId, meetingId, req.organization.id]
+    );
+    if (!seg) {
+      throw new AppError(404, 'Segment not found.', 'NOT_FOUND');
+    }
+
+    const splitMs = Number(splitTimestampMs || Math.floor((seg.start_ms + seg.end_ms) / 2));
+    const newSegmentId = crypto.randomUUID();
+
+    await withTransaction(async (conn) => {
+      // 1. Update first segment
+      await conn.query(
+        `UPDATE transcript_segments
+         SET end_ms = ?, text = ?, is_edited = 1, edited_by = ?
+         WHERE id = ?`,
+        [splitMs, splitTextFirst.trim(), req.user.id, segmentId]
+      );
+
+      // 2. Increment sequence_index for subsequent segments
+      await conn.query(
+        `UPDATE transcript_segments
+         SET sequence_index = sequence_index + 1
+         WHERE meeting_id = ? AND organization_id = ? AND sequence_index > ?`,
+        [meetingId, req.organization.id, seg.sequence_index]
+      );
+
+      // 3. Insert second segment
+      await conn.query(
+        `INSERT INTO transcript_segments (
+           id, organization_id, meeting_id, transcript_id, speaker_id,
+           sequence_index, start_ms, end_ms, text, is_edited, edited_by
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
+        [
+          newSegmentId,
+          req.organization.id,
+          meetingId,
+          seg.transcript_id,
+          seg.speaker_id,
+          seg.sequence_index + 1,
+          splitMs,
+          seg.end_ms,
+          splitTextSecond.trim(),
+          req.user.id,
+        ]
+      );
+    });
+
+    await syncMeetingTranscript(meetingId, req.organization.id);
+    emitOrgEvent(req, 'transcript:updated', { meetingId });
+
+    res.json({ success: true, newSegmentId });
+  })
+);
+
+router.post(
+  '/:id/transcript/segments/:segmentId/merge-next',
+  requireAuth,
+  requireOrganization,
+  asyncHandler(async (req, res) => {
+    const meetingId = assertValidUuid(req.params.id, 'meetingId');
+    const segmentId = assertValidUuid(req.params.segmentId, 'segmentId');
+
+    const seg1 = await queryOne(
+      `SELECT * FROM transcript_segments
+       WHERE id = ? AND meeting_id = ? AND organization_id = ?`,
+      [segmentId, meetingId, req.organization.id]
+    );
+    if (!seg1) {
+      throw new AppError(404, 'Segment not found.', 'NOT_FOUND');
+    }
+
+    const seg2 = await queryOne(
+      `SELECT * FROM transcript_segments
+       WHERE meeting_id = ? AND organization_id = ? AND sequence_index = ?`,
+      [meetingId, req.organization.id, seg1.sequence_index + 1]
+    );
+    if (!seg2) {
+      throw new AppError(400, 'No subsequent segment to merge with.', 'VALIDATION_ERROR');
+    }
+
+    const combinedText = `${seg1.text} ${seg2.text}`.trim();
+
+    await withTransaction(async (conn) => {
+      // 1. Update seg1 to span through seg2 end_ms with combined text
+      await conn.query(
+        `UPDATE transcript_segments
+         SET end_ms = ?, text = ?, is_edited = 1, edited_by = ?
+         WHERE id = ?`,
+        [seg2.end_ms, combinedText, req.user.id, seg1.id]
+      );
+
+      // 2. Delete seg2
+      await conn.query('DELETE FROM transcript_segments WHERE id = ?', [seg2.id]);
+
+      // 3. Shift subsequent sequence indices down
+      await conn.query(
+        `UPDATE transcript_segments
+         SET sequence_index = sequence_index - 1
+         WHERE meeting_id = ? AND organization_id = ? AND sequence_index > ?`,
+        [meetingId, req.organization.id, seg2.sequence_index]
+      );
+    });
+
+    await syncMeetingTranscript(meetingId, req.organization.id);
+    emitOrgEvent(req, 'transcript:updated', { meetingId });
+
+    res.json({ success: true });
+  })
+);
+
+router.delete(
+  '/:id/transcript/segments/:segmentId',
+  requireAuth,
+  requireOrganization,
+  asyncHandler(async (req, res) => {
+    const meetingId = assertValidUuid(req.params.id, 'meetingId');
+    const segmentId = assertValidUuid(req.params.segmentId, 'segmentId');
+
+    const seg = await queryOne(
+      `SELECT * FROM transcript_segments
+       WHERE id = ? AND meeting_id = ? AND organization_id = ?`,
+      [segmentId, meetingId, req.organization.id]
+    );
+    if (!seg) {
+      throw new AppError(404, 'Segment not found.', 'NOT_FOUND');
+    }
+
+    await withTransaction(async (conn) => {
+      await conn.query('DELETE FROM transcript_segments WHERE id = ?', [segmentId]);
+      await conn.query(
+        `UPDATE transcript_segments
+         SET sequence_index = sequence_index - 1
+         WHERE meeting_id = ? AND organization_id = ? AND sequence_index > ?`,
+        [meetingId, req.organization.id, seg.sequence_index]
+      );
+    });
+
+    await syncMeetingTranscript(meetingId, req.organization.id);
+    emitOrgEvent(req, 'transcript:updated', { meetingId });
+
+    res.json({ success: true });
+  })
+);
+
+router.patch(
+  '/:id/speakers/:speakerId',
+  requireAuth,
+  requireOrganization,
+  asyncHandler(async (req, res) => {
+    const meetingId = assertValidUuid(req.params.id, 'meetingId');
+    const speakerId = assertValidUuid(req.params.speakerId, 'speakerId');
+    const { displayName, colorHex } = req.body || {};
+
+    const speaker = await queryOne(
+      'SELECT * FROM speakers WHERE id = ? AND meeting_id = ? AND organization_id = ?',
+      [speakerId, meetingId, req.organization.id]
+    );
+    if (!speaker) {
+      throw new AppError(404, 'Speaker not found for this meeting.', 'NOT_FOUND');
+    }
+
+    const updates = [];
+    const params = [];
+
+    if (displayName !== undefined) {
+      if (typeof displayName !== 'string' || !displayName.trim()) {
+        throw new AppError(400, 'Display name cannot be empty.', 'VALIDATION_ERROR');
+      }
+      updates.push('display_name = ?');
+      params.push(displayName.trim().slice(0, 150));
+    }
+
+    if (colorHex !== undefined) {
+      const hex = String(colorHex).trim();
+      if (!/^#[0-9a-fA-F]{6}$/.test(hex)) {
+        throw new AppError(400, 'Invalid color hex format (#RRGGBB).', 'VALIDATION_ERROR');
+      }
+      updates.push('color_hex = ?');
+      params.push(hex);
+    }
+
+    if (updates.length > 0) {
+      params.push(speakerId, meetingId, req.organization.id);
+      await query(
+        `UPDATE speakers SET ${updates.join(', ')} WHERE id = ? AND meeting_id = ? AND organization_id = ?`,
+        params
+      );
+    }
+
+    const updated = await queryOne('SELECT * FROM speakers WHERE id = ?', [speakerId]);
+    emitOrgEvent(req, 'transcript:speaker-updated', { meetingId, speaker: updated });
+
+    res.json({ speaker: updated });
+  })
+);
+
+router.post(
+  '/:id/speakers',
+  requireAuth,
+  requireOrganization,
+  asyncHandler(async (req, res) => {
+    const meetingId = assertValidUuid(req.params.id, 'meetingId');
+    const { displayName, colorHex } = req.body || {};
+
+    if (!displayName || typeof displayName !== 'string' || !displayName.trim()) {
+      throw new AppError(400, 'Speaker display name is required.', 'VALIDATION_ERROR');
+    }
+
+    const existingCount = await queryOne(
+      'SELECT COUNT(*) AS total FROM speakers WHERE meeting_id = ? AND organization_id = ?',
+      [meetingId, req.organization.id]
+    );
+    const speakerKey = `SPEAKER_${String(existingCount.total).padStart(2, '0')}`;
+    const speakerId = crypto.randomUUID();
+    const color =
+      colorHex && /^#[0-9a-fA-F]{6}$/.test(colorHex)
+        ? colorHex
+        : '#762F48';
+
+    await query(
+      `INSERT INTO speakers (id, organization_id, meeting_id, speaker_key, display_name, color_hex)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [speakerId, req.organization.id, meetingId, speakerKey, displayName.trim().slice(0, 150), color]
+    );
+
+    const created = await queryOne('SELECT * FROM speakers WHERE id = ?', [speakerId]);
+    res.status(201).json({ speaker: created });
+  })
+);
+
+router.get(
+  '/:id/export',
+  requireAuth,
+  requireOrganization,
+  asyncHandler(async (req, res) => {
+    const meetingId = assertValidUuid(req.params.id, 'meetingId');
+    const format = String(req.query.format || 'txt').toLowerCase();
+    const exportType = String(req.query.type || 'full_report').toLowerCase();
+    const includeTimestamps = req.query.includeTimestamps !== '0' && req.query.includeTimestamps !== 'false';
+    const includeSpeakers = req.query.includeSpeakers !== '0' && req.query.includeSpeakers !== 'false';
+
+    assertEnum(format, ['txt', 'docx', 'pdf', 'markdown'], 'format');
+    assertEnum(exportType, ['full_report', 'transcript', 'summary'], 'exportType');
+
+    const meeting = await queryOne(
+      `SELECT m.*, u.full_name AS creator_name
+       FROM meetings m
+       INNER JOIN users u ON u.id = m.created_by
+       WHERE m.id = ? AND m.organization_id = ? AND m.deleted_at IS NULL`,
+      [meetingId, req.organization.id]
+    );
+    if (!meeting) {
+      throw new AppError(404, 'Meeting not found.', 'NOT_FOUND');
+    }
+
+    const [summary, decisions, actionItems, segments, speakers] = await Promise.all([
+      queryOne(
+        `SELECT * FROM meeting_summaries
+         WHERE meeting_id = ? AND organization_id = ?
+         ORDER BY FIELD(detail_level, 'standard', 'detailed', 'short') LIMIT 1`,
+        [meetingId, req.organization.id]
+      ),
+      query(
+        `SELECT d.*, s.display_name AS speakerName
+         FROM meeting_decisions d
+         LEFT JOIN speakers s ON s.id = d.speaker_id
+         WHERE d.meeting_id = ? AND d.organization_id = ?
+         ORDER BY d.timestamp_ms ASC, d.created_at ASC`,
+        [meetingId, req.organization.id]
+      ),
+      query(
+        `SELECT * FROM meeting_action_items
+         WHERE meeting_id = ? AND organization_id = ? AND deleted_at IS NULL
+         ORDER BY created_at ASC`,
+        [meetingId, req.organization.id]
+      ),
+      query(
+        `SELECT ts.*, COALESCE(s.display_name, 'Speaker') AS speakerName
+         FROM transcript_segments ts
+         LEFT JOIN speakers s ON s.id = ts.speaker_id
+         WHERE ts.meeting_id = ? AND ts.organization_id = ?
+         ORDER BY ts.sequence_index ASC`,
+        [meetingId, req.organization.id]
+      ),
+      query(
+        `SELECT * FROM speakers
+         WHERE meeting_id = ? AND organization_id = ?
+         ORDER BY speaker_key ASC`,
+        [meetingId, req.organization.id]
+      ),
+    ]);
+
+    const sanitizedTitle = (meeting.title || 'Meeting-Report')
+      .replace(/[^a-zA-Z0-9_-]/g, '_')
+      .slice(0, 50);
+
+    const payload = {
+      meeting,
+      summary,
+      decisions,
+      actionItems,
+      segments,
+      speakers,
+      includeTimestamps,
+      includeSpeakers,
+      exportType,
+    };
+
+    if (format === 'txt' || format === 'markdown') {
+      const text = generatePlainText(payload);
+      res.setHeader('Content-Type', format === 'markdown' ? 'text/markdown; charset=utf-8' : 'text/plain; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="${sanitizedTitle}.${format === 'markdown' ? 'md' : 'txt'}"`);
+      return res.send(text);
+    }
+
+    if (format === 'docx') {
+      const buffer = await generateDocx(payload);
+      res.setHeader(
+        'Content-Type',
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+      );
+      res.setHeader('Content-Disposition', `attachment; filename="${sanitizedTitle}.docx"`);
+      return res.send(buffer);
+    }
+
+    if (format === 'pdf') {
+      const buffer = await generatePdf(payload);
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="${sanitizedTitle}.pdf"`);
+      return res.send(buffer);
+    }
   })
 );
 

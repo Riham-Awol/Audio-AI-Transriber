@@ -1,4 +1,4 @@
-# VoxaMeet AI — REST API & Socket.IO Reference (Phases 1–2)
+# VoxaMeet AI — REST API & Socket.IO Reference (Phases 1–3)
 
 Base URL: `http://localhost:4000/api`
 
@@ -73,8 +73,24 @@ Protected by `X-API-Key: <AI_SERVICE_API_KEY>`:
 - `GET /internal/recordings/:id/file` — Streams original media file (or redirects to S3 presigned URL) for Python AI worker ingestion.
 - `POST /internal/transcription-callback` — Idempotent callback invoked by the AI microservice to report `queued`/`processing` progress, `failed` status, or `completed` diarized speakers and timestamped `transcript_segments` inside a MySQL transaction.
 
-## 9. Socket.IO Events
+## 9. Transcript Management & Editing (`/meetings/:id/transcript`) — Phase 3
+- `GET /meetings/:id/transcript` — Returns full meeting transcript, word count, confidence, ordered segments (with word-level timestamps), and speaker list.
+- `PATCH /meetings/:id/transcript/segments/:segmentId` — Edit segment text or reassign speaker (`{ text, speakerId }`). Sets `is_edited = 1` and synchronizes total transcript word count and full text. Emits `transcript:segment-updated`.
+- `POST /meetings/:id/transcript/segments/:segmentId/split` — Splits a segment into two contiguous segments at a given timestamp (`{ splitTimestampMs, splitTextFirst, splitTextSecond }`). Re-sequences following segments inside a MySQL transaction. Emits `transcript:updated`.
+- `POST /meetings/:id/transcript/segments/:segmentId/merge-next` — Merges a segment with its immediate successor (`sequence_index + 1`), combining text and end timestamps. Emits `transcript:updated`.
+- `DELETE /meetings/:id/transcript/segments/:segmentId` — Deletes an unnecessary or empty segment and shifts subsequent sequence indices down. Emits `transcript:updated`.
+- `PATCH /meetings/:id/speakers/:speakerId` — Renames a speaker (`displayName`, `colorHex`) globally across all meeting segments. Emits `transcript:speaker-updated`.
+- `POST /meetings/:id/speakers` — Adds a new custom speaker label for the meeting.
+
+## 10. Document Export & Printing (`/meetings/:id/export`) — Phase 3
+- `GET /meetings/:id/export` — Generates and downloads meeting documents based on query parameters:
+  - `format`: `pdf` (via PDFKit with header & corporate branding), `docx` (via DOCX library with tables & headings), `txt` (UTF-8 plain text), or `markdown` (`.md`).
+  - `type`: `full_report` (metadata, executive summary, decisions, action items, transcript), `transcript` (transcript only), or `summary` (summary and decisions only).
+  - `includeTimestamps`: `1` / `true` (default) or `0` / `false`.
+  - `includeSpeakers`: `1` / `true` (default) or `0` / `false`.
+
+## 11. Socket.IO Events
 - Client connects with `{ auth: { token, organizationId } }`.
 - Server joins socket to `org:<organizationId>` and `user:<userId>` rooms after verifying JWT & membership.
-- Emitted events: `meeting:created`, `meeting:updated`, `meeting:deleted`, `notification:new`, `transcription:progress`.
+- Emitted events: `meeting:created`, `meeting:updated`, `meeting:deleted`, `notification:new`, `transcription:progress`, `transcript:updated`, `transcript:segment-updated`, `transcript:speaker-updated`.
 

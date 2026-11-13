@@ -30,6 +30,8 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Modal } from '@/components/ui/dialog';
 import { Input, Select, Textarea } from '@/components/ui/input';
 import { MeetingModal } from '@/components/meetings/MeetingModal';
+import { ExportModal } from '@/components/meetings/ExportModal';
+import { TranscriptWorkspace } from '@/components/meetings/TranscriptWorkspace';
 
 const TABS = [
   { id: 'transcript', label: 'Transcript', icon: FileText },
@@ -64,6 +66,8 @@ export default function MeetingDetailPage() {
 
   const [playbackUrl, setPlaybackUrl] = useState('');
   const [retrying, setRetrying] = useState(false);
+  const [currentTimeMs, setCurrentTimeMs] = useState(0);
+  const [headerExportOpen, setHeaderExportOpen] = useState(false);
   const mediaRef = useRef(null);
 
   const loadDetail = useCallback(async () => {
@@ -300,6 +304,10 @@ export default function MeetingDetailPage() {
                   <Share2 className="h-3.5 w-3.5" />
                   Share ({shares?.length || 0})
                 </Button>
+                <Button variant="outline" size="sm" onClick={() => setHeaderExportOpen(true)}>
+                  <FileText className="h-3.5 w-3.5" />
+                  Export Report
+                </Button>
                 {primaryRecording && playbackUrl && (
                   <a href={`${playbackUrl}&download=1`} download={primaryRecording.fileName}>
                     <Button variant="outline" size="sm">
@@ -363,9 +371,21 @@ export default function MeetingDetailPage() {
                   </button>
                 </div>
                 {isVideoRecording ? (
-                  <video ref={mediaRef} src={playbackUrl} controls className="w-full max-h-64 rounded bg-black" />
+                  <video
+                    ref={mediaRef}
+                    src={playbackUrl}
+                    controls
+                    onTimeUpdate={(e) => setCurrentTimeMs(Math.floor(e.currentTarget.currentTime * 1000))}
+                    className="w-full max-h-64 rounded bg-black"
+                  />
                 ) : (
-                  <audio ref={mediaRef} src={playbackUrl} controls className="w-full" />
+                  <audio
+                    ref={mediaRef}
+                    src={playbackUrl}
+                    controls
+                    onTimeUpdate={(e) => setCurrentTimeMs(Math.floor(e.currentTarget.currentTime * 1000))}
+                    className="w-full"
+                  />
                 )}
               </div>
             )}
@@ -398,47 +418,17 @@ export default function MeetingDetailPage() {
 
       {/* Tab Content */}
       {activeTab === 'transcript' && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Transcript Viewer</CardTitle>
-            <Badge variant="midnight">
-              {segments?.length || 0} segments · Search, Edit & Exports in Phase 3
-            </Badge>
-          </CardHeader>
-          <CardContent>
-            {segments?.length > 0 ? (
-              <div className="space-y-3">
-                {segments.map((seg) => (
-                  <div key={seg.id} className="rounded-lg border border-border p-3 text-sm">
-                    <div className="flex items-center justify-between text-xs text-ink-muted mb-1">
-                      <span
-                        className="font-semibold"
-                        style={{ color: seg.speakerColor || '#762F48' }}
-                      >
-                        {seg.speakerName}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => seekToMs(seg.startMs)}
-                        className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 font-mono text-[11px] hover:bg-burgundy/10 hover:text-burgundy"
-                        title="Play from this timestamp"
-                      >
-                        <Play className="h-3 w-3" />
-                        {formatTs(seg.startMs)} – {formatTs(seg.endMs)}
-                      </button>
-                    </div>
-                    <p className="text-ink leading-relaxed">{seg.text}</p>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <p className="text-sm text-ink-muted">
-                No transcript segments stored yet. Record or upload a meeting recording to run
-                WhisperX transcription and pyannote speaker diarization.
-              </p>
-            )}
-          </CardContent>
-        </Card>
+        <TranscriptWorkspace
+          meeting={meeting}
+          segments={segments}
+          speakers={speakers}
+          summary={summary}
+          decisions={decisions}
+          actionItems={actionItems}
+          currentTimeMs={currentTimeMs}
+          seekToMs={seekToMs}
+          onReload={loadDetail}
+        />
       )}
 
       {activeTab === 'summary' && (
@@ -715,6 +705,13 @@ export default function MeetingDetailPage() {
           </div>
         </form>
       </Modal>
+
+      <ExportModal
+        open={headerExportOpen}
+        onClose={() => setHeaderExportOpen(false)}
+        meeting={meeting}
+        onPrint={() => window.print()}
+      />
     </div>
   );
 }
