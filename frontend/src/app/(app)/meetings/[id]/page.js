@@ -32,6 +32,9 @@ import { Input, Select, Textarea } from '@/components/ui/input';
 import { MeetingModal } from '@/components/meetings/MeetingModal';
 import { ExportModal } from '@/components/meetings/ExportModal';
 import { TranscriptWorkspace } from '@/components/meetings/TranscriptWorkspace';
+import { SummaryWorkspace } from '@/components/meetings/SummaryWorkspace';
+import { DecisionsWorkspace } from '@/components/meetings/DecisionsWorkspace';
+import { ActionItemsWorkspace } from '@/components/meetings/ActionItemsWorkspace';
 
 const TABS = [
   { id: 'transcript', label: 'Transcript', icon: FileText },
@@ -432,167 +435,31 @@ export default function MeetingDetailPage() {
       )}
 
       {activeTab === 'summary' && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Meeting Summary</CardTitle>
-            {summary && <Badge variant="burgundy">{humanizeEnum(summary.detailLevel)}</Badge>}
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {summary ? (
-              <>
-                <div>
-                  <h4 className="text-xs font-semibold uppercase tracking-wider text-ink-muted mb-1">
-                    Executive Summary
-                  </h4>
-                  <p className="text-sm text-ink leading-relaxed">{summary.executiveSummary}</p>
-                </div>
-                {summary.meetingPurpose && (
-                  <div>
-                    <h4 className="text-xs font-semibold uppercase tracking-wider text-ink-muted mb-1">
-                      Meeting Purpose
-                    </h4>
-                    <p className="text-sm text-ink">{summary.meetingPurpose}</p>
-                  </div>
-                )}
-                {Array.isArray(summary.mainTopics) && summary.mainTopics.length > 0 && (
-                  <div>
-                    <h4 className="text-xs font-semibold uppercase tracking-wider text-ink-muted mb-1.5">
-                      Main Topics
-                    </h4>
-                    <ul className="list-disc pl-5 text-sm space-y-1">
-                      {summary.mainTopics.map((topic, idx) => (
-                        <li key={idx}>{topic}</li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-              </>
-            ) : (
-              <p className="text-sm text-ink-muted">
-                No AI summary has been generated for this meeting yet. Hierarchical Qwen3.5
-                summarization will be wired in Phase 4.
-              </p>
-            )}
-          </CardContent>
-        </Card>
+        <SummaryWorkspace
+          meeting={meeting}
+          summary={summary}
+          onReload={loadDetail}
+        />
       )}
 
       {activeTab === 'decisions' && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Decisions</CardTitle>
-          </CardHeader>
-          <CardContent>
-            {decisions?.length > 0 ? (
-              <div className="space-y-3">
-                {decisions.map((d) => (
-                  <div key={d.id} className="rounded-lg border border-border p-3.5">
-                    <div className="flex items-center justify-between gap-2">
-                      <p className="text-sm font-medium text-ink">{d.description}</p>
-                      <Badge variant="success">{humanizeEnum(d.status)}</Badge>
-                    </div>
-                    {d.supportingQuote && (
-                      <p className="text-xs text-ink-muted mt-1 italic">“{d.supportingQuote}”</p>
-                    )}
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <p className="text-sm text-ink-muted">
-                No decisions recorded yet. Automated decision extraction arrives in Phase 4.
-              </p>
-            )}
-          </CardContent>
-        </Card>
+        <DecisionsWorkspace
+          meeting={meeting}
+          decisions={decisions}
+          speakers={speakers}
+          seekToMs={seekToMs}
+          onReload={loadDetail}
+        />
       )}
 
       {activeTab === 'actionItems' && (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
-          <Card className="lg:col-span-2">
-            <CardHeader>
-              <CardTitle>Action Items ({actionItems?.length || 0})</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-2.5">
-              {actionItems?.length === 0 ? (
-                <p className="text-sm text-ink-muted">No action items yet.</p>
-              ) : (
-                actionItems.map((item) => (
-                  <div
-                    key={item.id}
-                    className="flex items-center justify-between gap-3 rounded-lg border border-border p-3"
-                  >
-                    <button
-                      type="button"
-                      onClick={() => handleToggleTaskStatus(item)}
-                      className="flex items-center gap-3 text-left min-w-0"
-                    >
-                      <CheckCircle2
-                        className={`h-4 w-4 shrink-0 ${
-                          item.status === 'completed' ? 'text-emerald-600' : 'text-ink-muted'
-                        }`}
-                      />
-                      <div className="min-w-0">
-                        <p
-                          className={`text-sm font-medium truncate ${
-                            item.status === 'completed' ? 'line-through text-ink-muted' : 'text-ink'
-                          }`}
-                        >
-                          {item.title}
-                        </p>
-                        {item.assigneeName && (
-                          <p className="text-xs text-ink-muted">Owner: {item.assigneeName}</p>
-                        )}
-                      </div>
-                    </button>
-                    <Badge variant={statusBadgeVariant(item.priority)}>
-                      {humanizeEnum(item.priority)}
-                    </Badge>
-                  </div>
-                ))
-              )}
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle>Add Action Item</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <form onSubmit={handleAddActionItem} className="space-y-3">
-                <div>
-                  <label className="block text-xs font-medium mb-1">Task Title</label>
-                  <Input
-                    required
-                    minLength={2}
-                    value={taskTitle}
-                    onChange={(e) => setTaskTitle(e.target.value)}
-                    placeholder="Follow up with security team"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium mb-1">Responsible Person</label>
-                  <Input
-                    value={taskAssignee}
-                    onChange={(e) => setTaskAssignee(e.target.value)}
-                    placeholder="Optional"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium mb-1">Priority</label>
-                  <Select value={taskPriority} onChange={(e) => setTaskPriority(e.target.value)}>
-                    <option value="low">Low</option>
-                    <option value="medium">Medium</option>
-                    <option value="high">High</option>
-                    <option value="urgent">Urgent</option>
-                  </Select>
-                </div>
-                <Button type="submit" className="w-full" disabled={savingTask}>
-                  {savingTask ? 'Adding...' : 'Add Action Item'}
-                </Button>
-              </form>
-            </CardContent>
-          </Card>
-        </div>
+        <ActionItemsWorkspace
+          meeting={meeting}
+          actionItems={actionItems}
+          orgMembers={orgMembers}
+          seekToMs={seekToMs}
+          onReload={loadDetail}
+        />
       )}
 
       {activeTab === 'notes' && (

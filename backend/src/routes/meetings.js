@@ -6,6 +6,7 @@ import { AppError, asyncHandler } from '../middleware/errorHandler.js';
 import { assertEnum, assertValidUuid, parsePagination } from '../middleware/validate.js';
 import { recordAuditLog } from '../services/auditService.js';
 import { generateDocx, generatePdf, generatePlainText } from '../services/exportService.js';
+import { executeMeetingSummarization } from '../services/summaryService.js';
 
 const router = Router();
 
@@ -1182,6 +1183,481 @@ router.get(
       res.setHeader('Content-Disposition', `attachment; filename="${sanitizedTitle}.pdf"`);
       return res.send(buffer);
     }
+  })
+);
+
+// ---------------------------------------------------------------------------
+// Phase 4: Meeting Summary, Decisions & Action Items Intelligence
+// ---------------------------------------------------------------------------
+
+router.get(
+  '/:id/summary',
+  requireAuth,
+  requireOrganization,
+  asyncHandler(async (req, res) => {
+    const meetingId = assertValidUuid(req.params.id, 'meetingId');
+    const level = req.query.level ? String(req.query.level).toLowerCase() : 'standard';
+    assertEnum(level, ['short', 'standard', 'detailed'], 'level');
+
+    const summary = await queryOne(
+      `SELECT * FROM meeting_summaries
+       WHERE meeting_id = ? AND organization_id = ? AND detail_level = ?`,
+      [meetingId, req.organization.id, level]
+    );
+
+    const [decisions, actionItems] = await Promise.all([
+      query(
+        `SELECT d.*, s.display_name AS speakerName
+         FROM meeting_decisions d
+         LEFT JOIN speakers s ON s.id = d.speaker_id
+         WHERE d.meeting_id = ? AND d.organization_id = ?
+         ORDER BY d.timestamp_ms ASC, d.created_at ASC`,
+        [meetingId, req.organization.id]
+      ),
+      query(
+        `SELECT * FROM meeting_action_items
+         WHERE meeting_id = ? AND organization_id = ? AND deleted_at IS NULL
+         ORDER BY FIELD(status, 'in_progress', 'pending', 'completed', 'cancelled'),
+                  FIELD(priority, 'urgent', 'high', 'medium', 'low'),
+                  created_at ASC`,
+        [meetingId, req.organization.id]
+      ),
+    ]);
+
+    res.json({
+      summary: summary || null,
+      decisions: decisions || [],
+      actionItems: actionItems || [],
+    });
+  })
+);
+
+router.post(
+  '/:id/summary/generate',
+  requireAuth,
+  requireOrganization,
+  asyncHandler(async (req, res) => {
+    const meetingId = assertValidUuid(req.params.id, 'meetingId');
+    const { detailLevel = 'standard' } = req.body || {};
+    assertEnum(detailLevel, ['short', 'standard', 'detailed'], 'detailLevel');
+
+    const result = await executeMeetingSummarization({
+      meetingId,
+      organizationId: req.organization.id,
+      userId: req.user.id,
+      detailLevel,
+    });
+
+    emitOrgEvent(req, 'summary:generated', { meetingId, detailLevel, hasSummary: true });
+    emitOrgEvent(req, 'meeting:updated', { id: meetingId, hasSummary: true });
+
+    res.json({
+      success: true,
+      summary: result.summary,
+      decisions: result.decisions,
+      actionItems: result.actionItems,
+    });
+  })
+);
+
+router.patch(
+  '/:id/summary',
+  requireAuth,
+  requireOrganization,
+  asyncHandler(async (req, res) => {
+    const meetingId = assertValidUuid(req.params.id, 'meetingId');
+    const {
+      detailLevel = 'standard',
+      executiveSummary,
+      meetingPurpose,
+      mainTopics,
+      discussionPoints,
+      challengesConcerns,
+      risksIdentified,
+      nextSteps,
+      minutesMarkdown,
+    } = req.body || {};
+
+    assertEnum(detailLevel, ['short', 'standard', 'detailed'], 'detailLevel');
+
+    const existing = await queryOne(
+      `SELECT id FROM meeting_summaries
+       WHERE meeting_id = ? AND organization_id = ? AND detail_level = ?`,
+      [meetingId, req.organization.id, detailLevel]
+    );
+
+    if (!existing) {
+      throw new AppError(404, 'Summary not found. Generate a summary first.', 'NOT_FOUND');
+    }
+
+    const updates = ['is_edited = 1', 'edited_by = ?'];
+    const params = [req.user.id];
+
+    if (executiveSummary !== undefined) {
+      updates.push('executive_summary = ?');
+      params.push(String(executiveSummary));
+    }
+    if (meetingPurpose !== undefined) {
+      updates.push('meeting_purpose = ?');
+      params.push(String(meetingPurpose));
+    }
+    if (mainTopics !== undefined) {
+      updates.push('main_topics = ?');
+      params.push(JSON.stringify(mainTopics));
+    }
+    if (discussionPoints !== undefined) {
+      updates.push('discussion_points = ?');
+      params.push(JSON.stringify(discussionPoints));
+    }
+    if (challengesConcerns !== undefined) {
+      updates.push('challenges_concerns = ?');
+      params.push(JSON.stringify(challengesConcerns));
+    }
+    if (risksIdentified !== undefined) {
+      updates.push('risks_identified = ?');
+      params.push(JSON.stringify(risksIdentified));
+    }
+    if (nextSteps !== undefined) {
+      updates.push('next_steps = ?');
+      params.push(JSON.stringify(nextSteps));
+    }
+    if (minutesMarkdown !== undefined) {
+      updates.push('minutes_markdown = ?');
+      params.push(String(minutesMarkdown));
+    }
+
+    params.push(meetingId, req.organization.id, detailLevel);
+    await query(
+      `UPDATE meeting_summaries
+       SET ${updates.join(', ')}
+       WHERE meeting_id = ? AND organization_id = ? AND detail_level = ?`,
+      params
+    );
+
+    const updated = await queryOne(
+      `SELECT * FROM meeting_summaries
+       WHERE meeting_id = ? AND organization_id = ? AND detail_level = ?`,
+      [meetingId, req.organization.id, detailLevel]
+    );
+
+    emitOrgEvent(req, 'summary:updated', { meetingId, detailLevel, summary: updated });
+    res.json({ summary: updated });
+  })
+);
+
+router.get(
+  '/:id/decisions',
+  requireAuth,
+  requireOrganization,
+  asyncHandler(async (req, res) => {
+    const meetingId = assertValidUuid(req.params.id, 'meetingId');
+    const decisions = await query(
+      `SELECT d.*, s.display_name AS speakerName
+       FROM meeting_decisions d
+       LEFT JOIN speakers s ON s.id = d.speaker_id
+       WHERE d.meeting_id = ? AND d.organization_id = ?
+       ORDER BY d.timestamp_ms ASC, d.created_at ASC`,
+      [meetingId, req.organization.id]
+    );
+    res.json({ decisions });
+  })
+);
+
+router.post(
+  '/:id/decisions',
+  requireAuth,
+  requireOrganization,
+  asyncHandler(async (req, res) => {
+    const meetingId = assertValidUuid(req.params.id, 'meetingId');
+    const { description, speakerId, timestampMs = 0, supportingQuote = '', status = 'agreed' } = req.body || {};
+
+    if (!description || typeof description !== 'string' || !description.trim()) {
+      throw new AppError(400, 'Decision description is required.', 'VALIDATION_ERROR');
+    }
+    assertEnum(status, ['proposed', 'agreed', 'deferred', 'rejected'], 'status');
+
+    if (speakerId) {
+      assertValidUuid(speakerId, 'speakerId');
+    }
+
+    const decisionId = crypto.randomUUID();
+    await query(
+      `INSERT INTO meeting_decisions (
+         id, organization_id, meeting_id, speaker_id, description,
+         supporting_quote, timestamp_ms, status
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        decisionId,
+        req.organization.id,
+        meetingId,
+        speakerId || null,
+        description.trim().slice(0, 500),
+        supportingQuote ? String(supportingQuote).trim().slice(0, 500) : null,
+        Math.max(0, Number(timestampMs || 0)),
+        status,
+      ]
+    );
+
+    const created = await queryOne(
+      `SELECT d.*, s.display_name AS speakerName
+       FROM meeting_decisions d
+       LEFT JOIN speakers s ON s.id = d.speaker_id
+       WHERE d.id = ?`,
+      [decisionId]
+    );
+
+    emitOrgEvent(req, 'decisions:updated', { meetingId, decision: created });
+    res.status(201).json({ decision: created });
+  })
+);
+
+router.patch(
+  '/:id/decisions/:decisionId',
+  requireAuth,
+  requireOrganization,
+  asyncHandler(async (req, res) => {
+    const meetingId = assertValidUuid(req.params.id, 'meetingId');
+    const decisionId = assertValidUuid(req.params.decisionId, 'decisionId');
+    const { description, speakerId, timestampMs, supportingQuote, status } = req.body || {};
+
+    const existing = await queryOne(
+      'SELECT id FROM meeting_decisions WHERE id = ? AND meeting_id = ? AND organization_id = ?',
+      [decisionId, meetingId, req.organization.id]
+    );
+    if (!existing) {
+      throw new AppError(404, 'Decision not found.', 'NOT_FOUND');
+    }
+
+    const updates = [];
+    const params = [];
+
+    if (description !== undefined) {
+      if (!description.trim()) {
+        throw new AppError(400, 'Description cannot be empty.', 'VALIDATION_ERROR');
+      }
+      updates.push('description = ?');
+      params.push(description.trim().slice(0, 500));
+    }
+    if (speakerId !== undefined) {
+      if (speakerId) assertValidUuid(speakerId, 'speakerId');
+      updates.push('speaker_id = ?');
+      params.push(speakerId || null);
+    }
+    if (timestampMs !== undefined) {
+      updates.push('timestamp_ms = ?');
+      params.push(Math.max(0, Number(timestampMs || 0)));
+    }
+    if (supportingQuote !== undefined) {
+      updates.push('supporting_quote = ?');
+      params.push(supportingQuote ? String(supportingQuote).trim().slice(0, 500) : null);
+    }
+    if (status !== undefined) {
+      assertEnum(status, ['proposed', 'agreed', 'deferred', 'rejected'], 'status');
+      updates.push('status = ?');
+      params.push(status);
+    }
+
+    if (updates.length > 0) {
+      params.push(decisionId, meetingId, req.organization.id);
+      await query(
+        `UPDATE meeting_decisions SET ${updates.join(', ')} WHERE id = ? AND meeting_id = ? AND organization_id = ?`,
+        params
+      );
+    }
+
+    const updated = await queryOne(
+      `SELECT d.*, s.display_name AS speakerName
+       FROM meeting_decisions d
+       LEFT JOIN speakers s ON s.id = d.speaker_id
+       WHERE d.id = ?`,
+      [decisionId]
+    );
+
+    emitOrgEvent(req, 'decisions:updated', { meetingId, decision: updated });
+    res.json({ decision: updated });
+  })
+);
+
+router.delete(
+  '/:id/decisions/:decisionId',
+  requireAuth,
+  requireOrganization,
+  asyncHandler(async (req, res) => {
+    const meetingId = assertValidUuid(req.params.id, 'meetingId');
+    const decisionId = assertValidUuid(req.params.decisionId, 'decisionId');
+
+    await query(
+      'DELETE FROM meeting_decisions WHERE id = ? AND meeting_id = ? AND organization_id = ?',
+      [decisionId, meetingId, req.organization.id]
+    );
+
+    emitOrgEvent(req, 'decisions:updated', { meetingId, deletedId: decisionId });
+    res.json({ success: true });
+  })
+);
+
+router.get(
+  '/:id/action-items',
+  requireAuth,
+  requireOrganization,
+  asyncHandler(async (req, res) => {
+    const meetingId = assertValidUuid(req.params.id, 'meetingId');
+    const actionItems = await query(
+      `SELECT * FROM meeting_action_items
+       WHERE meeting_id = ? AND organization_id = ? AND deleted_at IS NULL
+       ORDER BY FIELD(status, 'in_progress', 'pending', 'completed', 'cancelled'),
+                FIELD(priority, 'urgent', 'high', 'medium', 'low'),
+                created_at ASC`,
+      [meetingId, req.organization.id]
+    );
+    res.json({ actionItems });
+  })
+);
+
+router.post(
+  '/:id/action-items',
+  requireAuth,
+  requireOrganization,
+  asyncHandler(async (req, res) => {
+    const meetingId = assertValidUuid(req.params.id, 'meetingId');
+    const {
+      title,
+      description = '',
+      assigneeName = null,
+      assigneeUserId = null,
+      dueDate = null,
+      priority = 'medium',
+      status = 'pending',
+      sourceTimestampMs = 0,
+    } = req.body || {};
+
+    if (!title || typeof title !== 'string' || title.trim().length < 2) {
+      throw new AppError(400, 'Action item title must be at least 2 characters.', 'VALIDATION_ERROR');
+    }
+    assertEnum(priority, ['low', 'medium', 'high', 'urgent'], 'priority');
+    assertEnum(status, ['pending', 'in_progress', 'completed', 'cancelled'], 'status');
+
+    if (assigneeUserId) {
+      assertValidUuid(assigneeUserId, 'assigneeUserId');
+    }
+
+    const actionItemId = crypto.randomUUID();
+    await query(
+      `INSERT INTO meeting_action_items (
+         id, organization_id, meeting_id, assignee_user_id, assignee_name,
+         title, description, due_date, priority, status, source_timestamp_ms
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        actionItemId,
+        req.organization.id,
+        meetingId,
+        assigneeUserId || null,
+        assigneeName ? String(assigneeName).trim().slice(0, 150) : null,
+        title.trim().slice(0, 255),
+        description ? String(description).trim().slice(0, 500) : null,
+        dueDate ? new Date(dueDate) : null,
+        priority,
+        status,
+        Math.max(0, Number(sourceTimestampMs || 0)),
+      ]
+    );
+
+    const created = await queryOne(
+      'SELECT * FROM meeting_action_items WHERE id = ?',
+      [actionItemId]
+    );
+
+    emitOrgEvent(req, 'action-items:updated', { meetingId, actionItem: created });
+    res.status(201).json({ actionItem: created });
+  })
+);
+
+router.patch(
+  '/:id/action-items/:actionItemId',
+  requireAuth,
+  requireOrganization,
+  asyncHandler(async (req, res) => {
+    const meetingId = assertValidUuid(req.params.id, 'meetingId');
+    const actionItemId = assertValidUuid(req.params.actionItemId, 'actionItemId');
+    const { title, description, assigneeName, assigneeUserId, dueDate, priority, status } = req.body || {};
+
+    const existing = await queryOne(
+      'SELECT id FROM meeting_action_items WHERE id = ? AND meeting_id = ? AND organization_id = ? AND deleted_at IS NULL',
+      [actionItemId, meetingId, req.organization.id]
+    );
+    if (!existing) {
+      throw new AppError(404, 'Action item not found.', 'NOT_FOUND');
+    }
+
+    const updates = [];
+    const params = [];
+
+    if (title !== undefined) {
+      if (!title.trim()) throw new AppError(400, 'Title cannot be empty.', 'VALIDATION_ERROR');
+      updates.push('title = ?');
+      params.push(title.trim().slice(0, 255));
+    }
+    if (description !== undefined) {
+      updates.push('description = ?');
+      params.push(description ? String(description).trim().slice(0, 500) : null);
+    }
+    if (assigneeName !== undefined) {
+      updates.push('assignee_name = ?');
+      params.push(assigneeName ? String(assigneeName).trim().slice(0, 150) : null);
+    }
+    if (assigneeUserId !== undefined) {
+      if (assigneeUserId) assertValidUuid(assigneeUserId, 'assigneeUserId');
+      updates.push('assignee_user_id = ?');
+      params.push(assigneeUserId || null);
+    }
+    if (dueDate !== undefined) {
+      updates.push('due_date = ?');
+      params.push(dueDate ? new Date(dueDate) : null);
+    }
+    if (priority !== undefined) {
+      assertEnum(priority, ['low', 'medium', 'high', 'urgent'], 'priority');
+      updates.push('priority = ?');
+      params.push(priority);
+    }
+    if (status !== undefined) {
+      assertEnum(status, ['pending', 'in_progress', 'completed', 'cancelled'], 'status');
+      updates.push('status = ?');
+      params.push(status);
+    }
+
+    if (updates.length > 0) {
+      params.push(actionItemId, meetingId, req.organization.id);
+      await query(
+        `UPDATE meeting_action_items SET ${updates.join(', ')} WHERE id = ? AND meeting_id = ? AND organization_id = ?`,
+        params
+      );
+    }
+
+    const updated = await queryOne(
+      'SELECT * FROM meeting_action_items WHERE id = ?',
+      [actionItemId]
+    );
+
+    emitOrgEvent(req, 'action-items:updated', { meetingId, actionItem: updated });
+    res.json({ actionItem: updated });
+  })
+);
+
+router.delete(
+  '/:id/action-items/:actionItemId',
+  requireAuth,
+  requireOrganization,
+  asyncHandler(async (req, res) => {
+    const meetingId = assertValidUuid(req.params.id, 'meetingId');
+    const actionItemId = assertValidUuid(req.params.actionItemId, 'actionItemId');
+
+    await query(
+      'UPDATE meeting_action_items SET deleted_at = CURRENT_TIMESTAMP WHERE id = ? AND meeting_id = ? AND organization_id = ?',
+      [actionItemId, meetingId, req.organization.id]
+    );
+
+    emitOrgEvent(req, 'action-items:updated', { meetingId, deletedId: actionItemId });
+    res.json({ success: true });
   })
 );
 

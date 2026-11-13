@@ -1,4 +1,4 @@
-# VoxaMeet AI — REST API & Socket.IO Reference (Phases 1–3)
+# VoxaMeet AI — REST API & Socket.IO Reference (Phases 1–4)
 
 Base URL: `http://localhost:4000/api`
 
@@ -89,8 +89,22 @@ Protected by `X-API-Key: <AI_SERVICE_API_KEY>`:
   - `includeTimestamps`: `1` / `true` (default) or `0` / `false`.
   - `includeSpeakers`: `1` / `true` (default) or `0` / `false`.
 
-## 11. Socket.IO Events
+## 11. AI Summarization, Decisions & Action Items — Phase 4
+- `GET /meetings/:id/summary?level=short|standard|detailed` — Returns meeting summary for specified detail level, along with decisions and action items.
+- `POST /meetings/:id/summary/generate` — Triggers hierarchical AI summarization (`{ detailLevel: 'short' | 'standard' | 'detailed' }`) using Ollama Qwen3.5/Qwen2.5 or local NLP engine, saving executive summary, purpose, topics, discussion points, challenges, risks, next steps, decisions, and action items. Emits `summary:generated`.
+- `PATCH /meetings/:id/summary` — Updates executive summary, purpose, topics, minutes markdown, etc. Emits `summary:updated`.
+- `GET /meetings/:id/decisions` — List decisions for the meeting.
+- `POST /meetings/:id/decisions` — Add manual decision (`{ description, speakerId, status, timestampMs, supportingQuote }`).
+- `PATCH /meetings/:id/decisions/:decisionId` — Edit decision description, status (`agreed`, `proposed`, `deferred`, `rejected`), speaker, or quote.
+- `DELETE /meetings/:id/decisions/:decisionId` — Delete decision.
+- `GET /meetings/:id/action-items` — List action items for the meeting.
+- `POST /meetings/:id/action-items` — Create action item (`{ title, description, assigneeUserId, assigneeName, dueDate, priority, status }`).
+- `PATCH /meetings/:id/action-items/:actionItemId` — Update action item title, assignee, due date, priority, or status.
+- `DELETE /meetings/:id/action-items/:actionItemId` — Soft-delete action item.
+- `POST /internal/summary-callback` (Internal, `X-API-Key`) — Callback endpoint invoked by Python AI microservice to deliver summary results.
+
+## 12. Socket.IO Events
 - Client connects with `{ auth: { token, organizationId } }`.
 - Server joins socket to `org:<organizationId>` and `user:<userId>` rooms after verifying JWT & membership.
-- Emitted events: `meeting:created`, `meeting:updated`, `meeting:deleted`, `notification:new`, `transcription:progress`, `transcript:updated`, `transcript:segment-updated`, `transcript:speaker-updated`.
+- Emitted events: `meeting:created`, `meeting:updated`, `meeting:deleted`, `notification:new`, `transcription:progress`, `transcript:updated`, `transcript:segment-updated`, `transcript:speaker-updated`, `summary:generated`, `summary:updated`, `decisions:updated`, `action-items:updated`.
 

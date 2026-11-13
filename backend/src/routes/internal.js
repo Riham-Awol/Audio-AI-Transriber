@@ -5,6 +5,7 @@ import { env } from '../config/env.js';
 import { AppError, asyncHandler } from '../middleware/errorHandler.js';
 import { assertValidUuid } from '../middleware/validate.js';
 import { getS3PresignedUrl, streamLocalFileWithRange } from '../services/storageService.js';
+import { persistMeetingSummary } from '../services/summaryService.js';
 
 const router = Router();
 
@@ -296,6 +297,65 @@ router.post(
     }
 
     res.json({ ok: true });
+  })
+);
+
+router.post(
+  '/summary-callback',
+  asyncHandler(async (req, res) => {
+    const {
+      meetingId,
+      organizationId,
+      userId,
+      detailLevel = 'standard',
+      modelName,
+      executiveSummary,
+      meetingPurpose,
+      mainTopics,
+      discussionPoints,
+      challengesConcerns,
+      risksIdentified,
+      nextSteps,
+      minutesMarkdown,
+      decisions,
+      actionItems,
+    } = req.body || {};
+
+    assertValidUuid(meetingId, 'meetingId');
+    assertValidUuid(organizationId, 'organizationId');
+
+    const result = await persistMeetingSummary({
+      meetingId,
+      organizationId,
+      userId,
+      detailLevel,
+      modelName,
+      executiveSummary,
+      meetingPurpose,
+      mainTopics,
+      discussionPoints,
+      challengesConcerns,
+      risksIdentified,
+      nextSteps,
+      minutesMarkdown,
+      decisions,
+      actionItems,
+    });
+
+    const io = req.app.get('io');
+    if (io) {
+      io.to(`org:${organizationId}`).emit('summary:generated', {
+        meetingId,
+        detailLevel,
+        hasSummary: true,
+      });
+      io.to(`org:${organizationId}`).emit('meeting:updated', {
+        id: meetingId,
+        hasSummary: true,
+      });
+    }
+
+    res.json({ ok: true, result });
   })
 );
 

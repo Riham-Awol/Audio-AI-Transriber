@@ -22,6 +22,10 @@ class Settings(BaseSettings):
     redis_url: str = ""
     transcription_queue_key: str = "voxameet:transcription:jobs"
 
+    ollama_url: str = "http://localhost:11434"
+    llm_model: str = "qwen2.5:7b"
+    llm_provider: str = "ollama"
+
     ai_work_dir: Path = Path("./work")
 
 

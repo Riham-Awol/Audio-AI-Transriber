@@ -53,3 +53,41 @@ class TranscriptionProvider(ABC):
         """Transcribes an audio chunk and attaches speaker diarization labels."""
         raise NotImplementedError
 
+
+@dataclass
+class SummaryResult:
+    executive_summary: str
+    meeting_purpose: str = ""
+    main_topics: list[str] = field(default_factory=list)
+    discussion_points: list[dict[str, Any]] = field(default_factory=list)
+    decisions: list[dict[str, Any]] = field(default_factory=list)
+    action_items: list[dict[str, Any]] = field(default_factory=list)
+    challenges_concerns: list[str] = field(default_factory=list)
+    risks_identified: list[str] = field(default_factory=list)
+    next_steps: list[str] = field(default_factory=list)
+    minutes_markdown: str = ""
+    model_name: str = "qwen2.5:7b"
+
+
+class LLMProvider(ABC):
+    """Abstract LLM provider interface for summarization and meeting intelligence.
+
+    Default implementation connects to self-hosted Ollama (Qwen3.5 9B / Qwen2.5 7B).
+    Optional external LLM APIs (OpenAI, Claude, etc.) can implement this interface.
+    """
+
+    name: str = "base"
+
+    @abstractmethod
+    def summarize_meeting(
+        self,
+        transcript_text: str,
+        *,
+        title: str = "",
+        detail_level: str = "standard",
+        speakers: list[str] | None = None,
+    ) -> SummaryResult:
+        """Generates structured meeting summary, minutes, decisions and action items."""
+        raise NotImplementedError
+
+
