@@ -5,6 +5,7 @@ import { env } from '../config/env.js';
 import { AppError, asyncHandler } from '../middleware/errorHandler.js';
 import { assertValidUuid } from '../middleware/validate.js';
 import { getS3PresignedUrl, streamLocalFileWithRange } from '../services/storageService.js';
+import { ragService } from '../services/ragService.js';
 import { persistMeetingSummary } from '../services/summaryService.js';
 
 const router = Router();
@@ -279,6 +280,9 @@ router.post(
           ]
         );
       });
+
+      // Automatically index segments into vector store in background
+      ragService.indexMeetingTranscript(organizationId, meetingId).catch(() => {});
 
       if (io) {
         io.to(`org:${organizationId}`).emit('meeting:updated', {

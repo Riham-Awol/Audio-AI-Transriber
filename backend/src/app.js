@@ -6,6 +6,7 @@ import morgan from 'morgan';
 import { env } from './config/env.js';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
 import actionItemsRoutes from './routes/actionItems.js';
+import assistantRoutes from './routes/assistant.js';
 import authRoutes from './routes/auth.js';
 import dashboardRoutes from './routes/dashboard.js';
 import healthRoutes from './routes/health.js';
@@ -68,6 +69,7 @@ export function createApp() {
   app.use('/api/meetings', meetingsRoutes);
   app.use('/api/recordings', recordingsRoutes);
   app.use('/api/internal', internalRoutes);
+  app.use('/api/assistant', assistantRoutes);
   app.use('/api/action-items', actionItemsRoutes);
   app.use('/api/notifications', notificationsRoutes);
   app.use('/api/search', searchRoutes);

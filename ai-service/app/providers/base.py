@@ -91,3 +91,41 @@ class LLMProvider(ABC):
         raise NotImplementedError
 
 
+@dataclass
+class CitationResult:
+    segment_id: str
+    meeting_id: str
+    speaker_name: str
+    start_ms: int
+    end_ms: int
+    quote: str
+    meeting_title: str = ""
+
+
+@dataclass
+class ChatResponseResult:
+    answer: str
+    citations: list[CitationResult] = field(default_factory=list)
+    model_name: str = "qwen2.5:7b"
+
+
+class EmbeddingProvider(ABC):
+    """Abstract embedding provider interface for semantic search & RAG.
+
+    Default implementation uses self-hosted Ollama with `nomic-embed-text`.
+    """
+
+    name: str = "base"
+    vector_dim: int = 768
+
+    @abstractmethod
+    def embed_texts(self, texts: list[str]) -> list[list[float]]:
+        """Embeds a batch of texts into dense vectors."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def embed_query(self, text: str) -> list[float]:
+        """Embeds a single query string into a dense vector."""
+        raise NotImplementedError
+
+

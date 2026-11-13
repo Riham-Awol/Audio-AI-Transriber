@@ -108,3 +108,18 @@ Protected by `X-API-Key: <AI_SERVICE_API_KEY>`:
 - Server joins socket to `org:<organizationId>` and `user:<userId>` rooms after verifying JWT & membership.
 - Emitted events: `meeting:created`, `meeting:updated`, `meeting:deleted`, `notification:new`, `transcription:progress`, `transcript:updated`, `transcript:segment-updated`, `transcript:speaker-updated`, `summary:generated`, `summary:updated`, `decisions:updated`, `action-items:updated`.
 
+## 13. Semantic Knowledge & AI Assistant (RAG Pipeline) — Phase 5
+- `GET /meetings/:id/chat/history` — Fetches conversational chat messages and citations for this meeting workspace.
+- `POST /meetings/:id/chat` — Sends a question to the in-meeting AI assistant (`{ message: string }`). Returns `{ sessionId, message: { id, role, content, citations, modelName }, citations }` with grounded speaker and timestamp citations.
+- `DELETE /meetings/:id/chat/history` — Clears conversation history for the meeting.
+- `POST /meetings/:id/index` — Indexes or re-indexes transcript segments into the organization's vector store (ChromaDB / `nomic-embed-text`).
+- `GET /assistant/sessions` — Lists user's cross-meeting assistant conversation sessions.
+- `POST /assistant/sessions` — Creates a new assistant chat session (`{ title, scopeType: 'organization' | 'multi_meeting', scopeMeetingIds }`).
+- `GET /assistant/sessions/:sessionId` — Retrieves message history for the specified session.
+- `DELETE /assistant/sessions/:sessionId` — Deletes an assistant chat session.
+- `POST /assistant/chat` — Cross-meeting AI assistant endpoint (`{ message, sessionId?, meetingIds?, dateFrom?, dateTo? }`). Answers queries across all organization transcripts with meeting and timestamp citations.
+- `GET /assistant/search?q=...&meetingId=...&limit=...` — Cross-meeting semantic vector search returning similarity-ranked transcript excerpts with match percentages.
+- `POST /rag/index` (AI Service Microservice) — Indexes transcript chunks into ChromaDB collection `voxa_org_<organizationId>`.
+- `POST /rag/query` (AI Service Microservice) — Vector similarity search returning top-k matching segments.
+- `POST /rag/chat` (AI Service Microservice) — RAG chat generator grounded on transcript vectors and Qwen3.5 LLM.
+

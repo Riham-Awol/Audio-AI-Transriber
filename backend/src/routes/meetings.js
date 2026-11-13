@@ -6,6 +6,7 @@ import { AppError, asyncHandler } from '../middleware/errorHandler.js';
 import { assertEnum, assertValidUuid, parsePagination } from '../middleware/validate.js';
 import { recordAuditLog } from '../services/auditService.js';
 import { generateDocx, generatePdf, generatePlainText } from '../services/exportService.js';
+import { ragService } from '../services/ragService.js';
 import { executeMeetingSummarization } from '../services/summaryService.js';
 
 const router = Router();
@@ -1658,6 +1659,210 @@ router.delete(
 
     emitOrgEvent(req, 'action-items:updated', { meetingId, deletedId: actionItemId });
     res.json({ success: true });
+  })
+);
+
+/**
+ * ============================================================================
+ * Phase 5: In-Meeting AI Assistant & RAG Chat Endpoints
+ * ============================================================================
+ */
+
+router.get(
+  '/:id/chat/history',
+  requireAuth,
+  requireOrganization,
+  asyncHandler(async (req, res) => {
+    const meetingId = assertValidUuid(req.params.id, 'meetingId');
+    const meeting = await getMeetingForUser(req, meetingId);
+
+    // Find or create default meeting chat session
+    let session = await queryOne(
+      `SELECT id, title FROM chat_sessions
+       WHERE organization_id = ? AND meeting_id = ? AND user_id = ?`,
+      [req.organization.id, meeting.id, req.user.id]
+    );
+
+    if (!session) {
+      const sessionId = crypto.randomUUID();
+      await query(
+        `INSERT INTO chat_sessions (id, organization_id, user_id, meeting_id, scope_type, title)
+         VALUES (?, ?, ?, ?, 'meeting', ?)`,
+        [sessionId, req.organization.id, req.user.id, meeting.id, `Chat: ${meeting.title}`]
+      );
+      session = { id: sessionId, title: `Chat: ${meeting.title}` };
+    }
+
+    const messages = await query(
+      `SELECT id, role, content, citations, model_name AS modelName, created_at AS createdAt
+       FROM chat_messages
+       WHERE session_id = ? AND organization_id = ?
+       ORDER BY created_at ASC`,
+      [session.id, req.organization.id]
+    );
+
+    res.json({
+      sessionId: session.id,
+      meetingId: meeting.id,
+      messages: messages.map((m) => ({
+        ...m,
+        citations: typeof m.citations === 'string' ? JSON.parse(m.citations) : (m.citations || []),
+      })),
+    });
+  })
+);
+
+router.post(
+  '/:id/chat',
+  requireAuth,
+  requireOrganization,
+  asyncHandler(async (req, res) => {
+    const meetingId = assertValidUuid(req.params.id, 'meetingId');
+    const meeting = await getMeetingForUser(req, meetingId);
+
+    const messageText = String(req.body.message || '').trim();
+    if (!messageText) {
+      throw new AppError(400, 'Message cannot be empty.', 'VALIDATION_ERROR');
+    }
+
+    // Find or create meeting chat session
+    let session = await queryOne(
+      `SELECT id FROM chat_sessions
+       WHERE organization_id = ? AND meeting_id = ? AND user_id = ?`,
+      [req.organization.id, meeting.id, req.user.id]
+    );
+
+    let sessionId = session?.id;
+    if (!sessionId) {
+      sessionId = crypto.randomUUID();
+      await query(
+        `INSERT INTO chat_sessions (id, organization_id, user_id, meeting_id, scope_type, title)
+         VALUES (?, ?, ?, ?, 'meeting', ?)`,
+        [sessionId, req.organization.id, req.user.id, meeting.id, `Chat: ${meeting.title}`]
+      );
+    }
+
+    // Insert user message
+    const userMsgId = crypto.randomUUID();
+    await query(
+      `INSERT INTO chat_messages (id, organization_id, session_id, role, content)
+       VALUES (?, ?, ?, 'user', ?)`,
+      [userMsgId, req.organization.id, sessionId, messageText]
+    );
+
+    // Retrieve past messages for conversation context
+    const pastMessages = await query(
+      `SELECT role, content FROM chat_messages
+       WHERE session_id = ? AND organization_id = ?
+       ORDER BY created_at ASC LIMIT 8`,
+      [sessionId, req.organization.id]
+    );
+
+    // Fetch meeting context (summary & decisions & action items)
+    const [summary, decisions, actionItems] = await Promise.all([
+      queryOne(
+        `SELECT executive_summary AS executiveSummary, meeting_purpose AS meetingPurpose
+         FROM meeting_summaries
+         WHERE meeting_id = ? AND organization_id = ?
+         ORDER BY FIELD(detail_level, 'standard', 'detailed', 'short') LIMIT 1`,
+        [meeting.id, req.organization.id]
+      ),
+      query(
+        `SELECT description, status FROM meeting_decisions
+         WHERE meeting_id = ? AND organization_id = ?`,
+        [meeting.id, req.organization.id]
+      ),
+      query(
+        `SELECT title, assignee_name AS assigneeName, priority, status
+         FROM meeting_action_items
+         WHERE meeting_id = ? AND organization_id = ? AND deleted_at IS NULL`,
+        [meeting.id, req.organization.id]
+      ),
+    ]);
+
+    const meetingContext = {
+      title: meeting.title,
+      executiveSummary: summary?.executiveSummary || '',
+      decisions: decisions || [],
+      actionItems: actionItems || [],
+    };
+
+    // Generate grounded RAG response
+    const ragResponse = await ragService.generateChatResponse({
+      organizationId: req.organization.id,
+      meetingId: meeting.id,
+      query: messageText,
+      history: pastMessages,
+      meetingContext,
+    });
+
+    // Save assistant message
+    const assistantMsgId = crypto.randomUUID();
+    await query(
+      `INSERT INTO chat_messages (id, organization_id, session_id, role, content, citations, model_name)
+       VALUES (?, ?, ?, 'assistant', ?, ?, ?)`,
+      [
+        assistantMsgId,
+        req.organization.id,
+        sessionId,
+        ragResponse.answer,
+        JSON.stringify(ragResponse.citations || []),
+        ragResponse.modelName || 'qwen2.5:7b',
+      ]
+    );
+
+    await query(
+      `UPDATE chat_sessions SET updated_at = NOW() WHERE id = ?`,
+      [sessionId]
+    );
+
+    res.json({
+      sessionId,
+      message: {
+        id: assistantMsgId,
+        role: 'assistant',
+        content: ragResponse.answer,
+        citations: ragResponse.citations || [],
+        modelName: ragResponse.modelName,
+        createdAt: new Date().toISOString(),
+      },
+      citations: ragResponse.citations || [],
+    });
+  })
+);
+
+router.delete(
+  '/:id/chat/history',
+  requireAuth,
+  requireOrganization,
+  asyncHandler(async (req, res) => {
+    const meetingId = assertValidUuid(req.params.id, 'meetingId');
+    const meeting = await getMeetingForUser(req, meetingId);
+
+    const session = await queryOne(
+      `SELECT id FROM chat_sessions
+       WHERE organization_id = ? AND meeting_id = ? AND user_id = ?`,
+      [req.organization.id, meeting.id, req.user.id]
+    );
+
+    if (session) {
+      await query(`DELETE FROM chat_messages WHERE session_id = ?`, [session.id]);
+    }
+
+    res.json({ success: true, meetingId: meeting.id });
+  })
+);
+
+router.post(
+  '/:id/index',
+  requireAuth,
+  requireOrganization,
+  asyncHandler(async (req, res) => {
+    const meetingId = assertValidUuid(req.params.id, 'meetingId');
+    const meeting = await getMeetingForUser(req, meetingId);
+
+    const result = await ragService.indexMeetingTranscript(req.organization.id, meeting.id);
+    res.json({ success: true, ...result });
   })
 );
 

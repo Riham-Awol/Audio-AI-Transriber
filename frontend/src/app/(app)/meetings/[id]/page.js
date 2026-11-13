@@ -35,6 +35,7 @@ import { TranscriptWorkspace } from '@/components/meetings/TranscriptWorkspace';
 import { SummaryWorkspace } from '@/components/meetings/SummaryWorkspace';
 import { DecisionsWorkspace } from '@/components/meetings/DecisionsWorkspace';
 import { ActionItemsWorkspace } from '@/components/meetings/ActionItemsWorkspace';
+import { MeetingAiChat } from '@/components/meetings/MeetingAiChat';
 
 const TABS = [
   { id: 'transcript', label: 'Transcript', icon: FileText },
@@ -518,16 +519,13 @@ export default function MeetingDetailPage() {
       )}
 
       {activeTab === 'aiChat' && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Meeting AI Assistant</CardTitle>
-            <Badge variant="midnight">RAG Pipeline in Phase 5</Badge>
-          </CardHeader>
-          <CardContent className="text-sm text-ink-muted">
-            ChromaDB semantic chunk retrieval (`nomic-embed-text`) and Qwen3.5 meeting Q&A with
-            clickable transcript citations will be enabled in Phase 5.
-          </CardContent>
-        </Card>
+        <MeetingAiChat
+          meeting={meeting}
+          summary={summary}
+          decisions={decisions}
+          actionItems={actionItems}
+          seekToMs={seekToMs}
+        />
       )}
 
       <MeetingModal

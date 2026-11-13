@@ -25,7 +25,10 @@ class Settings(BaseSettings):
     ollama_url: str = "http://localhost:11434"
     llm_model: str = "qwen2.5:7b"
     llm_provider: str = "ollama"
+    embedding_model: str = "nomic-embed-text"
+    embedding_provider: str = "ollama"
 
+    chroma_dir: Path = Path("./chroma_db")
     ai_work_dir: Path = Path("./work")
 
 
