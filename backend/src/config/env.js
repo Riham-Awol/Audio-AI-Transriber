@@ -81,4 +81,9 @@ export const env = {
     pass: process.env.SMTP_PASS || '',
     from: process.env.EMAIL_FROM || 'VoxaMeet AI <no-reply@voxameet.local>',
   },
+
+  encryptionKey: requireSecret(
+    'ENCRYPTION_KEY',
+    'dev-encryption-key-32bytes-secret!'
+  ),
 };

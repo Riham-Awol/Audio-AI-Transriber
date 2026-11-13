@@ -4,6 +4,7 @@ import { query, queryOne } from '../config/database.js';
 import { requireAuth, requireOrganization } from '../middleware/auth.js';
 import { AppError, asyncHandler } from '../middleware/errorHandler.js';
 import { assertEnum, assertValidUuid } from '../middleware/validate.js';
+import { integrationService } from '../services/integrationService.js';
 
 const router = Router();
 const PRIORITIES = ['low', 'medium', 'high', 'urgent'];
@@ -196,6 +197,24 @@ router.delete(
       throw new AppError(404, 'Action item not found.', 'NOT_FOUND');
     }
     res.json({ success: true });
+  })
+);
+
+router.post(
+  '/:id/export-jira',
+  requireAuth,
+  requireOrganization,
+  asyncHandler(async (req, res) => {
+    const id = assertValidUuid(req.params.id, 'actionItemId');
+    const { projectKey = 'VOXA', issueType = 'Task' } = req.body || {};
+
+    const result = await integrationService.exportActionItemToJira(
+      req.organization.id,
+      id,
+      { projectKey, issueType }
+    );
+
+    res.json(result);
   })
 );
 

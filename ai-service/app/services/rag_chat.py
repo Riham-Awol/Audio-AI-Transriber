@@ -233,3 +233,4 @@ class RAGChatService:
 
 
 rag_chat_service = RAGChatService()
+

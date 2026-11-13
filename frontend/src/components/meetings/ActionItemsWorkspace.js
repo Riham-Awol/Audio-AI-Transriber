@@ -8,6 +8,7 @@ import {
   Clock,
   Download,
   Edit2,
+  ExternalLink,
   ListTodo,
   Loader2,
   Play,
@@ -65,6 +66,7 @@ export function ActionItemsWorkspace({
   const [status, setStatus] = useState('pending');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [jiraExportingId, setJiraExportingId] = useState(null);
 
   const filteredItems = (actionItems || []).filter((ai) => {
     if (statusFilter !== 'all' && ai.status !== statusFilter) return false;
@@ -173,6 +175,21 @@ export function ActionItemsWorkspace({
       await onReload?.();
     } catch (err) {
       alert(err.message || 'Failed to delete action item.');
+    }
+  };
+
+  const handleExportJira = async (ai) => {
+    setJiraExportingId(ai.id);
+    try {
+      await apiRequest(`/action-items/${ai.id}/export-jira`, {
+        method: 'POST',
+        body: { projectKey: 'VOXA' },
+      });
+      await onReload?.();
+    } catch (err) {
+      alert(err.message || 'Failed to export task to Jira.');
+    } finally {
+      setJiraExportingId(null);
     }
   };
 
@@ -321,6 +338,19 @@ export function ActionItemsWorkspace({
                         In Progress
                       </span>
                     )}
+
+                    {(ai.external_issue_key || ai.externalIssueKey) && (
+                      <a
+                        href={ai.external_issue_url || ai.externalIssueUrl || '#'}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex items-center gap-1 text-[10px] font-semibold text-indigo-700 bg-indigo-50 dark:bg-indigo-950/60 dark:text-indigo-300 px-1.5 py-0.2 rounded border border-indigo-200 dark:border-indigo-800 hover:underline"
+                        title="View linked Jira issue"
+                      >
+                        <span>Jira: {ai.external_issue_key || ai.externalIssueKey}</span>
+                        <ExternalLink className="h-2.5 w-2.5" />
+                      </a>
+                    )}
                   </div>
 
                   {ai.description && (
@@ -356,6 +386,19 @@ export function ActionItemsWorkspace({
 
                 {/* Actions */}
                 <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                  {!(ai.external_issue_key || ai.externalIssueKey) && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      disabled={jiraExportingId === ai.id}
+                      onClick={() => handleExportJira(ai)}
+                      className="h-7 px-2 text-[11px] font-semibold text-indigo-700 dark:text-indigo-300 hover:bg-indigo-50 dark:hover:bg-indigo-950/40 gap-1"
+                      title="Export this task to Atlassian Jira"
+                    >
+                      <span>Jira</span>
+                      <ExternalLink className="h-3 w-3" />
+                    </Button>
+                  )}
                   <Button
                     size="sm"
                     variant="ghost"

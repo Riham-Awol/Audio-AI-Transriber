@@ -6,6 +6,7 @@ import { AppError, asyncHandler } from '../middleware/errorHandler.js';
 import { assertEnum, assertValidUuid, parsePagination } from '../middleware/validate.js';
 import { recordAuditLog } from '../services/auditService.js';
 import { generateDocx, generatePdf, generatePlainText } from '../services/exportService.js';
+import { integrationService } from '../services/integrationService.js';
 import { ragService } from '../services/ragService.js';
 import { executeMeetingSummarization } from '../services/summaryService.js';
 
@@ -1863,6 +1864,25 @@ router.post(
 
     const result = await ragService.indexMeetingTranscript(req.organization.id, meeting.id);
     res.json({ success: true, ...result });
+  })
+);
+
+router.post(
+  '/:id/share-slack',
+  requireAuth,
+  requireOrganization,
+  asyncHandler(async (req, res) => {
+    const meetingId = assertValidUuid(req.params.id, 'meetingId');
+    const meeting = await getMeetingForUser(req, meetingId);
+
+    const { channel = '#general' } = req.body || {};
+    const result = await integrationService.shareMeetingToSlack(
+      req.organization.id,
+      meeting.id,
+      { channel }
+    );
+
+    res.json(result);
   })
 );
 

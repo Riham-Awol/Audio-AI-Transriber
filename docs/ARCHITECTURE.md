@@ -47,6 +47,6 @@ VoxaMeet AI is a multi-tenant, organization-isolated Meeting Intelligence & Mana
 - **Phase 3 (Implemented)**: Interactive Transcript Viewer (real-time playback sync & word-level highlighting, match navigation, speaker relabeling modal, inline editing, segment split/merge/delete, print view, PDF/DOCX/TXT/Markdown export).
 - **Phase 4 (Implemented)**: Hierarchical AI Summarization (Ollama Qwen3.5 9B / Qwen2.5 7B + local NLP engine fallback, executive summary, purpose, topics, discussion points, challenges & risks, next steps, meeting minutes markdown, decisions workspace with statuses, action items workspace with 1-click completion).
 - **Phase 5 (Implemented)**: ChromaDB + `nomic-embed-text` dense vector embeddings, organization-isolated vector collections (`voxa_org_<orgId>`), In-Meeting AI Assistant with transcript citations & audio seeking, and Global Cross-Meeting AI Assistant (`/assistant`) with multi-turn chat sessions and semantic search.
-- **Phase 6**: OAuth 2.0 Integrations Marketplace (Zoom, Google Meet, Microsoft Teams, Google Calendar, Outlook, Slack, Jira).
+- **Phase 6 (Implemented)**: OAuth 2.0 Integrations Marketplace (Google Calendar, Outlook Calendar, Zoom, Google Meet, Microsoft Teams, Slack, Jira, Google Drive, Dropbox), AES-256-GCM token encryption vault, two-way Calendar Synchronization with 1-click meeting import, 1-click Jira task export, and Slack Block Kit summary broadcasting.
 - **Phase 7**: Advanced Reports, Analytics, Hardening & Production Deployment.
 

@@ -123,3 +123,17 @@ Protected by `X-API-Key: <AI_SERVICE_API_KEY>`:
 - `POST /rag/query` (AI Service Microservice) — Vector similarity search returning top-k matching segments.
 - `POST /rag/chat` (AI Service Microservice) — RAG chat generator grounded on transcript vectors and Qwen3.5 LLM.
 
+## 14. OAuth 2.0 & Integrations Marketplace & Calendar Sync — Phase 6
+- `GET /integrations` — Lists all marketplace providers (Google Calendar, Outlook Calendar, Zoom, Google Meet, Microsoft Teams, Slack, Jira, Google Drive, Dropbox) merged with connection status, account config, and last sync timestamp.
+- `POST /integrations/:provider/connect` (`org_admin`, `manager`) — Connects a provider, encrypting access and refresh tokens using authenticated AES-256-GCM in the `integration_tokens` table.
+- `DELETE /integrations/:provider` (`org_admin`, `manager`) — Disconnects provider and purges encrypted tokens.
+- `POST /integrations/:provider/sync` — Synchronizes external events or cloud recordings from the provider.
+- `POST /integrations/:provider/test` — Tests connection health.
+- `GET /integrations/:provider/oauth/authorize` & `GET /integrations/:provider/oauth/callback` — OAuth 2.0 code exchange and redirect flow.
+- `GET /calendar/events` — Lists synced calendar events from Google Calendar and Outlook Calendar, joined with scheduled VoxaMeet meetings.
+- `POST /calendar/events` — Manually creates a calendar event (`{ title, description, locationOrUrl, startTime, endTime }`).
+- `POST /calendar/events/:id/create-meeting` — 1-click converter turning a synced calendar event into a scheduled VoxaMeet recording session.
+- `POST /calendar/sync` — Synchronizes all connected calendar providers in one batch.
+- `POST /action-items/:id/export-jira` — Exports an action item into an Atlassian Jira issue (`external_issue_key`, `external_issue_url`).
+- `POST /meetings/:id/share-slack` — Broadcasts executive summary and key action items to a Slack channel using Block Kit formatting.
+

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
-import { CheckCircle2, ListTodo, Plus, Trash2 } from 'lucide-react';
+import { CheckCircle2, ExternalLink, ListTodo, Plus, Trash2 } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { apiRequest } from '@/lib/api';
 import { formatDateShort, humanizeEnum } from '@/lib/utils';
@@ -30,6 +30,7 @@ export default function ActionItemsPage() {
     priority: 'medium',
   });
   const [saving, setSaving] = useState(false);
+  const [exportingJiraId, setExportingJiraId] = useState(null);
 
   const loadData = useCallback(async () => {
     if (!activeOrg) return;
@@ -89,6 +90,19 @@ export default function ActionItemsPage() {
   const handleDelete = async (id) => {
     await apiRequest(`/action-items/${id}`, { method: 'DELETE' });
     loadData();
+  };
+
+  const handleExportJira = async (id) => {
+    setExportingJiraId(id);
+    try {
+      await apiRequest(`/action-items/${id}/export-jira`, {
+        method: 'POST',
+        body: { projectKey: 'VOXA' },
+      });
+      loadData();
+    } finally {
+      setExportingJiraId(null);
+    }
   };
 
   return (
@@ -175,17 +189,41 @@ export default function ActionItemsPage() {
                   >
                     {item.title}
                   </p>
-                  <div className="text-xs text-ink-muted mt-0.5 flex flex-wrap gap-2">
+                  <div className="text-xs text-ink-muted mt-0.5 flex flex-wrap gap-2 items-center">
                     <Link href={`/meetings/${item.meetingId}`} className="hover:underline text-burgundy">
                       {item.meetingTitle}
                     </Link>
                     {item.assigneeName && <span>· Owner: {item.assigneeName}</span>}
                     {item.dueDate && <span>· Due {formatDateShort(item.dueDate)}</span>}
+                    {(item.external_issue_key || item.externalIssueKey) && (
+                      <a
+                        href={item.external_issue_url || item.externalIssueUrl || '#'}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex items-center gap-1 text-[10px] font-semibold text-indigo-700 bg-indigo-50 dark:bg-indigo-950/60 dark:text-indigo-300 px-1.5 py-0.2 rounded border border-indigo-200 dark:border-indigo-800 hover:underline"
+                      >
+                        <span>Jira: {item.external_issue_key || item.externalIssueKey}</span>
+                        <ExternalLink className="h-2.5 w-2.5" />
+                      </a>
+                    )}
                   </div>
                 </div>
               </div>
 
               <div className="flex items-center gap-2 shrink-0">
+                {!(item.external_issue_key || item.externalIssueKey) && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={exportingJiraId === item.id}
+                    onClick={() => handleExportJira(item.id)}
+                    className="h-8 text-xs text-indigo-700 hover:bg-indigo-50 dark:hover:bg-indigo-950/30 gap-1 px-2"
+                    title="Export task to Atlassian Jira"
+                  >
+                    <span>Jira</span>
+                    <ExternalLink className="h-3 w-3" />
+                  </Button>
+                )}
                 <Badge variant={statusBadgeVariant(item.priority)}>
                   {humanizeEnum(item.priority)}
                 </Badge>

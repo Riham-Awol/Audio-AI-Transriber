@@ -123,3 +123,4 @@ def test_rag_chat_endpoint_grounded_citations():
     assert citation["speakerName"] == "Alex"
     assert citation["startMs"] == 65000
     assert "MySQL" in citation["quote"]
+

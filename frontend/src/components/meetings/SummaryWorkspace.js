@@ -17,6 +17,7 @@ import {
   Save,
   ShieldAlert,
   Sparkles,
+  Share2,
   Target,
   X,
 } from 'lucide-react';
@@ -38,6 +39,8 @@ export function SummaryWorkspace({ meeting, summary, onReload }) {
   const [purpose, setPurpose] = useState(summary?.meetingPurpose || '');
   const [minutesMd, setMinutesMd] = useState(summary?.minutesMarkdown || '');
   const [copiedMinutes, setCopiedMinutes] = useState(false);
+  const [sharingSlack, setSharingSlack] = useState(false);
+  const [slackSuccess, setSlackSuccess] = useState(false);
 
   const mainTopics = Array.isArray(summary?.mainTopics)
     ? summary.mainTopics
@@ -125,6 +128,22 @@ export function SummaryWorkspace({ meeting, summary, onReload }) {
     URL.revokeObjectURL(url);
   };
 
+  const handleShareSlack = async () => {
+    setSharingSlack(true);
+    try {
+      await apiRequest(`/meetings/${meeting.id}/share-slack`, {
+        method: 'POST',
+        body: { channel: '#general' },
+      });
+      setSlackSuccess(true);
+      setTimeout(() => setSlackSuccess(false), 3000);
+    } catch (err) {
+      alert(err.message || 'Failed to share to Slack.');
+    } finally {
+      setSharingSlack(false);
+    }
+  };
+
   return (
     <div className="space-y-5">
       {/* Top Header / Actions Bar */}
@@ -197,6 +216,24 @@ export function SummaryWorkspace({ meeting, summary, onReload }) {
               >
                 <Download className="h-3.5 w-3.5" />
                 Markdown
+              </Button>
+
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={sharingSlack}
+                onClick={handleShareSlack}
+                className="h-8 text-xs text-emerald-700 dark:text-emerald-300 border-emerald-300 dark:border-emerald-800 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 gap-1.5"
+                title="Broadcast executive summary to Slack"
+              >
+                {sharingSlack ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : slackSuccess ? (
+                  <Check className="h-3.5 w-3.5 text-emerald-600" />
+                ) : (
+                  <Share2 className="h-3.5 w-3.5" />
+                )}
+                {slackSuccess ? 'Shared to Slack!' : 'Slack'}
               </Button>
             </>
           )}

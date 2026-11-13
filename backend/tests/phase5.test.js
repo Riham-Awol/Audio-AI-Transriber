@@ -187,3 +187,4 @@ describe('Phase 5 — Semantic Knowledge & AI Assistant (RAG Pipeline)', () => {
     });
   });
 });
+

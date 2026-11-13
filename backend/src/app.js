@@ -8,8 +8,10 @@ import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
 import actionItemsRoutes from './routes/actionItems.js';
 import assistantRoutes from './routes/assistant.js';
 import authRoutes from './routes/auth.js';
+import calendarRoutes from './routes/calendar.js';
 import dashboardRoutes from './routes/dashboard.js';
 import healthRoutes from './routes/health.js';
+import integrationsRoutes from './routes/integrations.js';
 import internalRoutes from './routes/internal.js';
 import meetingsRoutes from './routes/meetings.js';
 import notificationsRoutes from './routes/notifications.js';
@@ -71,6 +73,8 @@ export function createApp() {
   app.use('/api/internal', internalRoutes);
   app.use('/api/assistant', assistantRoutes);
   app.use('/api/action-items', actionItemsRoutes);
+  app.use('/api/integrations', integrationsRoutes);
+  app.use('/api/calendar', calendarRoutes);
   app.use('/api/notifications', notificationsRoutes);
   app.use('/api/search', searchRoutes);
 

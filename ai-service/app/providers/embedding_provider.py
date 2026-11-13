@@ -120,3 +120,4 @@ class OllamaEmbeddingProvider(EmbeddingProvider):
     def embed_query(self, text: str) -> list[float]:
         results = self.embed_texts([text])
         return results[0] if results else [0.0] * self.vector_dim
+
