@@ -1,0 +1,15 @@
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+redis==5.2.1
+httpx==0.28.1
+pydantic-settings==2.7.1
+python-multipart==0.0.20
+
+# Phase 2 Audio & Transcription Engine (Open-source self-hosted)
+# Install PyTorch matching your CPU/CUDA platform first, then:
+whisperx==3.3.1
+pyannote.audio==3.3.2
+faster-whisper==1.1.0
+
+# Phase 4/5 (Ollama & ChromaDB)
+chromadb-client==0.5.20

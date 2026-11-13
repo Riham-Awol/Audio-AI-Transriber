@@ -1,0 +1,80 @@
+# VoxaMeet AI — REST API & Socket.IO Reference (Phases 1–2)
+
+Base URL: `http://localhost:4000/api`
+
+All authenticated endpoints require:
+- `Authorization: Bearer <accessToken>`
+- `X-Organization-Id: <organizationUuid>` (optional; defaults to user's primary organization)
+
+---
+
+## 1. Health
+- `GET /health` — Server & MySQL connectivity status.
+
+## 2. Authentication (`/auth`)
+- `POST /auth/register` — Register user (and optionally create first organization). Returns `accessToken`, `refreshToken`, `user`, `organizations`.
+- `POST /auth/login` — Authenticate with email/password. Creates `user_sessions` record.
+- `POST /auth/refresh` — Rotate refresh token and issue new access token.
+- `POST /auth/logout` — Revoke current refresh session.
+- `POST /auth/verify-email` — Verify user email via token.
+- `POST /auth/resend-verification` — Re-issue verification link.
+- `POST /auth/forgot-password` — Generate time-limited password reset token.
+- `POST /auth/reset-password` — Reset password using token.
+- `GET /auth/me` — Get current user profile, memberships, and active organization.
+- `PATCH /auth/me` — Update profile (`fullName`, `jobTitle`, `timezone`) or change password.
+- `GET /auth/sessions` — List active sessions for current user.
+- `DELETE /auth/sessions/:sessionId` — Revoke a specific session.
+
+## 3. Organizations & Team (`/organizations`)
+- `GET /organizations` — List organizations the authenticated user belongs to.
+- `POST /organizations` — Create a new organization (creator becomes `org_admin`).
+- `PATCH /organizations/current` — Update active organization name/industry/vocabulary (`org_admin`).
+- `GET /organizations/current/members` — List members and pending invitations.
+- `POST /organizations/current/invitations` — Invite member by email & role (`org_admin`, `manager`).
+- `POST /organizations/invitations/accept` — Accept an invitation token.
+- `DELETE /organizations/current/invitations/:invitationId` — Revoke pending invitation.
+- `PATCH /organizations/current/members/:memberId` — Update member role or status (`org_admin`).
+- `DELETE /organizations/current/members/:memberId` — Remove member (`org_admin`).
+
+## 4. Dashboard (`/dashboard`)
+- `GET /dashboard/overview` — Returns real MySQL counts & series for the active organization:
+  - `stats`: `totalMeetings`, `totalRecordedSeconds`, `totalTranscripts`, `totalActionItems`, `pendingTasks`, `meetingsThisWeek`
+  - `recentMeetings`, `upcomingMeetings`, `recentSummaries`, `outstandingActionItems`, `processingMeetings`
+  - `charts`: `activityLast14Days`, `durationByType`
+
+## 5. Meetings (`/meetings`)
+- `GET /meetings` — Paginated, searchable, filterable list (`search`, `status`, `meetingType`, `recordingSource`, `dateFrom`, `dateTo`, `includeArchived`, `page`, `limit`).
+- `POST /meetings` — Create meeting metadata.
+- `GET /meetings/:id` — Detailed meeting payload (meeting, creator, speakers, summary, decisions, action items, notes, shares). Strictly scoped to active organization.
+- `PATCH /meetings/:id` — Update meeting metadata.
+- `POST /meetings/:id/archive` — Archive/unarchive meeting.
+- `POST /meetings/:id/duplicate` — Duplicate meeting metadata into a new scheduled meeting.
+- `DELETE /meetings/:id` — Soft-delete meeting (`deleted_at`).
+- `POST /meetings/:id/share` — Share meeting with another active member of the same organization.
+- `DELETE /meetings/:id/share/:userId` — Revoke share.
+
+## 6. Notifications & Global Search
+- `GET /notifications` — List notifications for current user in active organization.
+- `PATCH /notifications/:id/read` — Mark single notification read.
+- `POST /notifications/read-all` — Mark all notifications read.
+- `GET /search?q=...` — Global search across organization meetings and action items.
+
+## 7. Recordings & Transcription Pipeline (`/recordings`) — Phase 2
+- `POST /recordings/upload` (`multipart/form-data`) — Upload audio/video (`file` up to `MAX_UPLOAD_SIZE_BYTES`), optional `meetingId` or new meeting metadata (`title`, `meetingType`, `recordingSource`, `speakerHints`, `vocabulary`, `consentConfirmed=true`). Returns `202 Accepted` with `meeting`, `recording`, and `job`.
+- `GET /recordings/meeting/:meetingId` — List non-deleted recordings for a meeting in the active organization.
+- `GET /recordings/:id/playback-url` — Returns a signed HMAC stream URL (`/api/recordings/:id/stream?org=...&exp=...&sig=...`) or S3/MinIO presigned URL.
+- `GET /recordings/:id/stream` — Streams audio/video with HTTP `206 Partial Content` `Range` support after verifying the HMAC signature (`org`, `exp`, `sig`).
+- `GET /recordings/:id/download` — Downloads the original recording file (`Content-Disposition: attachment`).
+- `POST /recordings/:id/retry` — Re-queues failed/stalled transcription jobs for the recording (`202 Accepted`).
+- `DELETE /recordings/:id` — Soft-deletes the recording metadata and removes the stored media file.
+
+## 8. Internal AI Worker Endpoints (`/internal`) — Phase 2
+Protected by `X-API-Key: <AI_SERVICE_API_KEY>`:
+- `GET /internal/recordings/:id/file` — Streams original media file (or redirects to S3 presigned URL) for Python AI worker ingestion.
+- `POST /internal/transcription-callback` — Idempotent callback invoked by the AI microservice to report `queued`/`processing` progress, `failed` status, or `completed` diarized speakers and timestamped `transcript_segments` inside a MySQL transaction.
+
+## 9. Socket.IO Events
+- Client connects with `{ auth: { token, organizationId } }`.
+- Server joins socket to `org:<organizationId>` and `user:<userId>` rooms after verifying JWT & membership.
+- Emitted events: `meeting:created`, `meeting:updated`, `meeting:deleted`, `notification:new`, `transcription:progress`.
+
