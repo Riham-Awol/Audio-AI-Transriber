@@ -137,3 +137,8 @@ Protected by `X-API-Key: <AI_SERVICE_API_KEY>`:
 - `POST /action-items/:id/export-jira` — Exports an action item into an Atlassian Jira issue (`external_issue_key`, `external_issue_url`).
 - `POST /meetings/:id/share-slack` — Broadcasts executive summary and key action items to a Slack channel using Block Kit formatting.
 
+## 15. Reports, Intelligence KPIs & Audit Trail — Phase 7
+- `GET /reports/analytics` — Organization-wide aggregated KPIs: total meeting volume, recorded hours, transcription accuracy, action item completion rate, trailing 6-month trends, and top active speakers.
+- `GET /reports/export?type=action_items|decisions` — Downloads consolidated CSV export of organization-wide action items or decisions with meeting attribution and dates.
+- `GET /reports/audit-logs` (`org_admin`, `manager`) — Immutable security and activity audit trail recording user actions, IP addresses, resource types, and timestamps.
+

@@ -17,6 +17,7 @@ import meetingsRoutes from './routes/meetings.js';
 import notificationsRoutes from './routes/notifications.js';
 import organizationsRoutes from './routes/organizations.js';
 import recordingsRoutes from './routes/recordings.js';
+import reportsRoutes from './routes/reports.js';
 import searchRoutes from './routes/search.js';
 
 export function createApp() {
@@ -75,6 +76,7 @@ export function createApp() {
   app.use('/api/action-items', actionItemsRoutes);
   app.use('/api/integrations', integrationsRoutes);
   app.use('/api/calendar', calendarRoutes);
+  app.use('/api/reports', reportsRoutes);
   app.use('/api/notifications', notificationsRoutes);
   app.use('/api/search', searchRoutes);
 
